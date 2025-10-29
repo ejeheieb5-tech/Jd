@@ -1,84 +1,57 @@
-name: RDP
-
+name: Free RDP via Ngrok
 on:
   workflow_dispatch:
 
 jobs:
-  secure-rdp:
+  build:
     runs-on: windows-latest
-    timeout-minutes: 3600
+    timeout-minutes: 360
 
     steps:
-      - name: Enable RDP and Configure Firewall
-        run: |
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
-                           -Name "fDenyTSConnections" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                           -Name "UserAuthentication" -Value 0 -Force
-          netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
-          Restart-Service -Name TermService -Force
+    - name: 🧰 إعداد النظام
+      run: |
+        choco install ngrok -y
+        Set-ExecutionPolicy Bypass -Scope Process -Force
+        net user RDP "H6TZ,%U$bI79" /add
+        net localgroup administrators RDP /add
+        reg add "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
-      - name: Create RDP User
-        run: |
-          $username = "RDP"
-          $password = -join ((33..126) | Get-Random -Count 12 | ForEach-Object {[char]$_})
-          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          New-LocalUser -Name $username -Password $securePass -AccountNeverExpires
-          Add-LocalGroupMember -Group "Administrators" -Member $username
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username
-          echo "RDP_USER=$username" >> $env:GITHUB_ENV
-          echo "RDP_PASS=$password" >> $env:GITHUB_ENV
+    - name: 🌐 تشغيل Ngrok TCP على المنفذ 3389
+      env:
+        NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
+      run: |
+        ngrok config add-authtoken $env:NGROK_AUTHTOKEN
+        Start-Process -FilePath "ngrok" -ArgumentList "tcp 3389 --log=stdout > ngrok.log" -WindowStyle Hidden
+        Start-Sleep -Seconds 15
 
-      - name: Install ngrok
-        run: |
-          Invoke-WebRequest -Uri "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip" -OutFile "$env:TEMP\ngrok.zip"
-          Expand-Archive "$env:TEMP\ngrok.zip" -DestinationPath "$env:ProgramData\ngrok" -Force
-          setx PATH "$env:PATH;$env:ProgramData\ngrok"
+    - name: 📡 عرض معلومات الاتصال
+      run: |
+        $tunnel = (Invoke-RestMethod -Uri "http://127.0.0.1:4040/api/tunnels").tunnels.public_url
+        echo "🔗 **RDP Address:** $tunnel"
+        echo "👤 **Username:** RDP"
+        echo "🔑 **Password:** H6TZ,%U$bI79"
+        echo "============================="
 
-      - name: Authenticate ngrok
-        run: |
-          & "$env:ProgramData\ngrok\ngrok.exe" authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
+        $address = $tunnel -replace "tcp://", ""
+        $rdpContent = @"
+full address:s:$address
+username:s:RDP
+"@
+        $rdpPath = "C:\Users\Public\Desktop\FreeRDP.rdp"
+        $rdpContent | Out-File -Encoding ASCII $rdpPath
 
-      - name: Start ngrok Tunnel
-        run: |
-          Start-Process -NoNewWindow -FilePath "$env:ProgramData\ngrok\ngrok.exe" `
-                        -ArgumentList "tcp", "3389", "--log=stdout", "--log-format=logfmt" `
-                        -RedirectStandardOutput "$env:TEMP\ngrok.log"
-          Start-Sleep -Seconds 15
+        Compress-Archive -Path $rdpPath -DestinationPath C:\RDP_File.zip
 
-          # التأكد من أن ngrok يعمل فعلاً
-          $tries = 0
-          while ($tries -lt 10) {
-            try {
-              $tunnelInfo = Invoke-RestMethod -Uri "http://127.0.0.1:4040/api/tunnels"
-              if ($tunnelInfo.tunnels.public_url) {
-                $publicUrl = ($tunnelInfo.tunnels.public_url | Where-Object {$_ -like "tcp*"})
-                echo "NGROK_TCP=$publicUrl" >> $env:GITHUB_ENV
-                break
-              }
-            } catch {
-              Start-Sleep -Seconds 3
-            }
-            $tries++
-          }
+    - name: 📁 رفع ملف RDP للتحميل
+      uses: actions/upload-artifact@v4
+      with:
+        name: Free-RDP-File
+        path: C:\RDP_File.zip
 
-          if (-not $publicUrl) {
-            Write-Error "Failed to retrieve ngrok tunnel URL"
-            exit 1
-          }
-
-      - name: Show Connection Info
-        run: |
-          Write-Host "==========================================="
-          Write-Host "✅ RDP is ready!"
-          Write-Host "🔗 Address: $env:NGROK_TCP"
-          Write-Host "👤 Username: $env:RDP_USER"
-          Write-Host "🔑 Password: $env:RDP_PASS"
-          Write-Host "==========================================="
-
-      - name: Keep Session Alive
-        run: |
-          while ($true) {
-            Write-Host "[$(Get-Date)] RDP session running..."
-            Start-Sleep -Seconds 300
-          }
+    - name: 🕓 إبقاء الجلسة حية
+      run: |
+        Write-Host "✅ RDP جاهز الآن!"
+        Write-Host "📱 استخدم تطبيق Microsoft Remote Desktop على الهاتف"
+        Write-Host "📌 أدخل العنوان الذي يظهر أعلاه مع اسم المستخدم وكلمة السر"
+        while ($true) { Start-Sleep -Seconds 300 }
