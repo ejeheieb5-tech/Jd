@@ -1,0 +1,57 @@
+name: Free RDP via Ngrok
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+    - name: 🧰 إعداد النظام
+      run: |
+        choco install ngrok -y
+        Set-ExecutionPolicy Bypass -Scope Process -Force
+        net user RDP "H6TZ,%U$bI79" /add
+        net localgroup administrators RDP /add
+        reg add "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+
+    - name: 🌐 تشغيل Ngrok TCP على المنفذ 3389
+      env:
+        NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
+      run: |
+        ngrok config add-authtoken $env:NGROK_AUTHTOKEN
+        Start-Process -FilePath "ngrok" -ArgumentList "tcp 3389 --log=stdout > ngrok.log" -WindowStyle Hidden
+        Start-Sleep -Seconds 15
+
+    - name: 📡 عرض معلومات الاتصال
+      run: |
+        $tunnel = (Invoke-RestMethod -Uri "http://127.0.0.1:4040/api/tunnels").tunnels.public_url
+        echo "🔗 **RDP Address:** $tunnel"
+        echo "👤 **Username:** RDP"
+        echo "🔑 **Password:** H6TZ,%U$bI79"
+        echo "============================="
+
+        $address = $tunnel -replace "tcp://", ""
+        $rdpContent = @"
+full address:s:$address
+username:s:RDP
+"@
+        $rdpPath = "C:\Users\Public\Desktop\FreeRDP.rdp"
+        $rdpContent | Out-File -Encoding ASCII $rdpPath
+
+        Compress-Archive -Path $rdpPath -DestinationPath C:\RDP_File.zip
+
+    - name: 📁 رفع ملف RDP للتحميل
+      uses: actions/upload-artifact@v4
+      with:
+        name: Free-RDP-File
+        path: C:\RDP_File.zip
+
+    - name: 🕓 إبقاء الجلسة حية
+      run: |
+        Write-Host "✅ RDP جاهز الآن!"
+        Write-Host "📱 استخدم تطبيق Microsoft Remote Desktop على الهاتف"
+        Write-Host "📌 أدخل العنوان الذي يظهر أعلاه مع اسم المستخدم وكلمة السر"
+        while ($true) { Start-Sleep -Seconds 300 }
