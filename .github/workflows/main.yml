@@ -1,0 +1,64 @@
+name: RDP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  windows-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 3600
+
+    steps:
+      - name: Enable Remote Desktop
+        run: |
+          # تفعيل RDP وتعطيل Network Level Authentication
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0
+          netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
+          Restart-Service TermService
+
+      - name: Create RDP User
+        run: |
+          Add-Type -AssemblyName System.Security
+          $chars = ([char[]](33..126))
+          $password = -join (1..12 | ForEach-Object { $chars | Get-Random })
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
+          echo "RDP_PASS=$password" >> $env:GITHUB_ENV
+
+      - name: Install Ngrok
+        run: |
+          Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-stable-windows-amd64.zip -OutFile ngrok.zip
+          Expand-Archive ngrok.zip -DestinationPath $env:USERPROFILE\ngrok
+          del ngrok.zip
+          echo "$env:USERPROFILE\ngrok" >> $env:GITHUB_PATH
+
+      - name: Connect Ngrok
+        run: |
+          # تأكد من وجود المفتاح في Secrets تحت اسم NGROK_AUTH_TOKEN
+          ngrok authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
+          Start-Process -NoNewWindow -FilePath ngrok -ArgumentList "tcp 3389" 
+          Start-Sleep -Seconds 15
+          $url = (Invoke-RestMethod -Uri "http://127.0.0.1:4040/api/tunnels") | Select-Object -ExpandProperty tunnels | Where-Object {$_.proto -eq "tcp"} | Select-Object -ExpandProperty public_url
+          echo "NGROK_URL=$url" >> $env:GITHUB_ENV
+
+      - name: Display RDP Info
+        run: |
+          Write-Host "`n========================="
+          Write-Host "✅ RDP Ready!"
+          Write-Host "🔗 Connect using this host:"
+          Write-Host "$env:NGROK_URL"
+          Write-Host ""
+          Write-Host "👤 Username: RDP"
+          Write-Host "🔑 Password: $env:RDP_PASS"
+          Write-Host "=========================`n"
+          Write-Host "Keep this job running to maintain RDP access."
+
+      - name: Keep Alive
+        run: |
+          while ($true) {
+              Write-Host "[$(Get-Date)] RDP session active..."
+              Start-Sleep -Seconds 300
+          }
