@@ -11,20 +11,11 @@ jobs:
     steps:
       - name: Enable RDP and Configure Firewall
         run: |
-          # تفعيل RDP
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
                            -Name "fDenyTSConnections" -Value 0 -Force
-
-          # تعطيل NLA لتسهيل الاتصال
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
                            -Name "UserAuthentication" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                           -Name "SecurityLayer" -Value 0 -Force
-
-          # السماح للمنفذ 3389 في الجدار الناري
           netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
-
-          # إعادة تشغيل خدمة RDP
           Restart-Service -Name TermService -Force
 
       - name: Create RDP User
@@ -32,12 +23,9 @@ jobs:
           $username = "RDP"
           $password = -join ((33..126) | Get-Random -Count 12 | ForEach-Object {[char]$_})
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-
-          # إنشاء المستخدم وإضافته إلى المجموعات
           New-LocalUser -Name $username -Password $securePass -AccountNeverExpires
           Add-LocalGroupMember -Group "Administrators" -Member $username
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username
-
           echo "RDP_USER=$username" >> $env:GITHUB_ENV
           echo "RDP_PASS=$password" >> $env:GITHUB_ENV
 
@@ -53,25 +41,39 @@ jobs:
 
       - name: Start ngrok Tunnel
         run: |
-          Start-Process -FilePath "$env:ProgramData\ngrok\ngrok.exe" `
-                        -ArgumentList "tcp 3389 --log=stdout > ngrok.log" -NoNewWindow
+          Start-Process -NoNewWindow -FilePath "$env:ProgramData\ngrok\ngrok.exe" `
+                        -ArgumentList "tcp", "3389", "--log=stdout", "--log-format=logfmt" `
+                        -RedirectStandardOutput "$env:TEMP\ngrok.log"
           Start-Sleep -Seconds 15
 
-          $tunnelInfo = Invoke-RestMethod -Uri "http://127.0.0.1:4040/api/tunnels"
-          $publicUrl = ($tunnelInfo.tunnels.public_url | Where-Object {$_ -like "tcp*"})
-          echo "NGROK_TCP=$publicUrl" >> $env:GITHUB_ENV
+          # التأكد من أن ngrok يعمل فعلاً
+          $tries = 0
+          while ($tries -lt 10) {
+            try {
+              $tunnelInfo = Invoke-RestMethod -Uri "http://127.0.0.1:4040/api/tunnels"
+              if ($tunnelInfo.tunnels.public_url) {
+                $publicUrl = ($tunnelInfo.tunnels.public_url | Where-Object {$_ -like "tcp*"})
+                echo "NGROK_TCP=$publicUrl" >> $env:GITHUB_ENV
+                break
+              }
+            } catch {
+              Start-Sleep -Seconds 3
+            }
+            $tries++
+          }
+
+          if (-not $publicUrl) {
+            Write-Error "Failed to retrieve ngrok tunnel URL"
+            exit 1
+          }
 
       - name: Show Connection Info
         run: |
           Write-Host "==========================================="
           Write-Host "✅ RDP is ready!"
-          Write-Host "Connect using the info below:"
-          Write-Host ""
-          Write-Host "🔗 RDP Address: $env:NGROK_TCP"
+          Write-Host "🔗 Address: $env:NGROK_TCP"
           Write-Host "👤 Username: $env:RDP_USER"
           Write-Host "🔑 Password: $env:RDP_PASS"
-          Write-Host ""
-          Write-Host "Use Microsoft Remote Desktop to connect."
           Write-Host "==========================================="
 
       - name: Keep Session Alive
